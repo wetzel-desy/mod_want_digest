@@ -1,24 +1,37 @@
 Description
 =================
 
-This module is an alpha version of an Apache2 httpd module that implements data integrity check in accordance with RFC 3230 (https://tools.ietf.org/html/rfc3230).
-It has been tested with instances of CERN's FTS3 and WebFTS, which do not return an error on the integrity checks.
+This module is an **alpha** version of an Apache2 httpd module that implements data integrity check in accordance with RFC 3230 (https://tools.ietf.org/html/rfc3230).
+It has been tested with various HTTP header combinations and returns the correct digests according to specifications in RFC 3230.
 
 The module is compiled with 
 ```
 sudo apxs -i -a -c mod_want_digest.c
 ```
-on the target machine. Currently, there is no config for the module, it just works on the HTTP GET and HEAD requests.
-FTS first transfers a file to the destination and at the end of the transfer sends a HEAD request with the additional "Want-Digest: ADLER32" header token.
-Currently, ADLER32, MD5 and SHA-1 checksums are supported.
+on the target machine. Currently, there is no config for the module, it just works on the HTTP GET and HEAD requests. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
+
+Example:
+``` 
+curl --head https://foo.bar.com/foobar.txt -H "Want-Digest: MD5"
+
+HTTP/1.1 200 OK
+Date: Mon, 12 Oct 2020 12:49:41 GMT
+Server: Apache/2.4.41 (Ubuntu)
+Digest: MD5=TZYmtg997D5xY2K5m/CKXg==
+Last-Modified: Thu, 08 Oct 2020 11:59:29 GMT
+Accept-Ranges: bytes
+Content-Length: 3000678009
+Vary: Accept-Encoding
+Content-Type: text/plain
+```
 
 TODO:
-- implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request (although it would be more correct to calculate the checksum from the file on disk)
-- implement a precalculation for all files on disk that are exposed to the internet(TM) in order to save time for large files. the checksums could be placed in a hidden directory .checksums in files like filename.md5, filename.sha and filename.adler32.
+- implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request.
+- implement a precalculation mechanism for all files on disk that are exposed to the internet(TM) in order to save time for large files.
 
 Contributors
 ================
-The module has been developed by Tim Wetzel and Paul Millar at Deutsches Elektronen-Synchrotron DESY.
+The module has been developed by T. Wetzel and P. Millar at Deutsches Elektronen-Synchrotron DESY.
 
 License
 =================
