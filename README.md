@@ -1,4 +1,4 @@
-#Description
+Description
 =================
 
 This module is an alpha version of an Apache2 httpd module that implements data integrity check in accordance with RFC 3230 (https://tools.ietf.org/html/rfc3230).
@@ -16,15 +16,15 @@ TODO:
 - implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request (although it would be more correct to calculate the checksum from the file on disk)
 - implement a precalculation for all files on disk that are exposed to the internet(TM) in order to save time for large files. the checksums could be placed in a hidden directory .checksums in files like filename.md5, filename.sha and filename.adler32.
 
-#Contributors
+Contributors
 ================
 The module has been developed by Tim Wetzel and Paul Millar at Deutsches Elektronen-Synchrotron DESY.
 
-#License
+License
 =================
 The project is licensed under the Apache 2.0 license.
 
-#How to contribute
+How to contribute
 =================
 
 **mod\_want\_digest** uses the linux kernel model where git is not only source repository,
