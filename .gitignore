@@ -1,0 +1,6 @@
+.libs/*
+.*.sw*
+*.la
+*.lo
+*.slo
+log
