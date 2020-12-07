@@ -50,11 +50,13 @@ typedef struct digest_algorithm {
 
 typedef struct st_md5 {
     unsigned char digest[APR_MD5_DIGESTSIZE];
+    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
     apr_md5_ctx_t md5;
 } st_md5;
 
 typedef struct st_sha {
     unsigned char digest[APR_SHA1_DIGESTSIZE];
+    char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
     apr_sha1_ctx_t sha1;
 } st_sha;
 
@@ -359,10 +361,10 @@ static int want_digest_get(request_rec *r)
 
 // when the input filter function is added to the filter chain on PUT it calculates the hashes of the file
 // on-the-fly and stores them as files in a replicated directory tree outside of the directory served by WebDAV. 
-static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *bb,
-                                             ap_input_mode_t mode,
-                                             apr_read_type_e block,
-                                             apr_off_t readbytes)
+static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *bb)
+                                             //ap_input_mode_t mode,
+                                             //apr_read_type_e block,
+                                             //apr_off_t readbytes)
 {
     apr_bucket *bucket;
     apr_status_t rv;
@@ -378,6 +380,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     apr_sha1_init(&(sha_data->sha1));
 
     size_t adler = adler32_z(0L, Z_NULL, 0);
+
     // get the buckets one by one
     for (bucket = APR_BRIGADE_FIRST(bb);
          bucket != APR_BRIGADE_SENTINEL(bb);
@@ -385,7 +388,30 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     {
         if (APR_BUCKET_IS_EOS(bucket))
         {
-            break;
+            // finalize hashes and write output files
+            // MD5
+            apr_md5_final(md5_data->digest, &(md5_data->md5));
+            apr_sha1_final(sha_data->digest, &(sha_data->sha1));
+            //ADLER32 is already finished at this point.
+            
+            // rewrite binary form of digests into readable string output
+            for (int i = 0; i<sizeof(md5_data->digest); i++)
+            {
+               snprintf(&(md5_data->hex_digest[i*2]), sizeof(md5_data->hex_digest)-(i*2), "%02x", md5_data->digest[i]); 
+            }
+            md5_data->hex_digest[sizeof(md5_data->hex_digest)-1] = '\0';
+
+            for (int i = 0; i<sizeof(sha_data->digest); i++)
+            {
+               snprintf(&sha_data->hex_digest[i*2], sizeof(sha_data->hex_digest)-(i*2), "%02x", sha_data->digest[i]); 
+            }
+            sha_data->hex_digest[sizeof(sha_data->hex_digest)-1] = '\0';
+
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", filename, md5_data->hex_digest, sha_data->hex_digest, adler);
+           
+            // now to save the hashes somwhere!
+            return ap_pass_brigade(f->next, bb);
         }
         else if (APR_BUCKET_IS_METADATA(bucket))
         {
@@ -402,30 +428,27 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
                 return 500;
             }
             //update all hashes here!
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "bucket: %s", data);
             apr_md5_update(&(md5_data->md5), data, len);
             apr_sha1_update(&(sha_data->sha1), data, len);
             adler = adler32_z(adler, data, len);
         }
     }
 
-    // finalize hashes and write output files
-    // MD5
-    apr_md5_final(md5_data->digest, &(md5_data->md5));
-    apr_sha1_final(sha_data->digest, &(sha_data->sha1));
-    //ADLER32 is already finished at this point.
-   
-    // now to save the hashes somwhere!
-    return APR_SUCCESS;
+    return APR_EGENERAL;
 }
 
 // when it is added on a DELETE, it takes care of deleting the previously hashed files and the directory if it is empty.
-static apr_status_t want_digest_delete_filter(ap_filter_t *f, apr_bucket_brigade *bb,
-                                             ap_input_mode_t mode,
-                                             apr_read_type_e block,
-                                             apr_off_t readbytes)
+static apr_status_t want_digest_delete_filter(ap_filter_t *f, apr_bucket_brigade *bb)
+                                            // ap_input_mode_t mode,
+                                            // apr_read_type_e block,
+                                            // apr_off_t readbytes)
 {
+    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                 "called delete_filter.");
    
-    return APR_SUCCESS;
+    return ap_pass_brigade(f->next, bb);
 }
 
 // the output filter checks if hashes are calculated and if they are, it just adds them to r->headers_out,
@@ -433,17 +456,19 @@ static apr_status_t want_digest_delete_filter(ap_filter_t *f, apr_bucket_brigade
 // want_digest_put_filter?
 static apr_status_t want_digest_get_filter(ap_filter_t *f, apr_bucket_brigade *bb)
 {
+    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                 "called get_filter.");
    
-    return APR_SUCCESS;
+    return ap_pass_brigade(f->next, bb);
 }
 
 static void insert_filter(request_rec *r){
     
     if (r->method_number == M_PUT ){
-        ap_add_input_filter_handle(filter_handle_put, NULL, r, r->connection);
+        ap_add_output_filter_handle(filter_handle_put, NULL, r, r->connection);
     }
     if (r->method_number == M_DELETE) {
-        ap_add_input_filter_handle(filter_handle_delete, NULL, r, r->connection);
+        ap_add_output_filter_handle(filter_handle_delete, NULL, r, r->connection);
     }
     if (r->method_number == M_GET) {
         ap_add_output_filter_handle(filter_handle_get, NULL, r, r->connection);
@@ -455,9 +480,9 @@ static void register_hooks(apr_pool_t *pool)
 {
     // register and add in/output filters
     filter_handle_put = 
-        ap_register_input_filter(filter_name_put, want_digest_put_filter, NULL, AP_FTYPE_RESOURCE);
+        ap_register_output_filter(filter_name_put, want_digest_put_filter, NULL, AP_FTYPE_RESOURCE);
     filter_handle_delete = 
-        ap_register_input_filter(filter_name_delete, want_digest_delete_filter, NULL, AP_FTYPE_RESOURCE);
+        ap_register_output_filter(filter_name_delete, want_digest_delete_filter, NULL, AP_FTYPE_RESOURCE);
     filter_handle_get = 
         ap_register_output_filter(filter_name_get, want_digest_get_filter, NULL, AP_FTYPE_RESOURCE);
     // hook in function to add the filters to the current request
@@ -465,7 +490,7 @@ static void register_hooks(apr_pool_t *pool)
 }
 
 /* Define our module as an entity and assign a function for registering hooks  */
-module AP_MODULE_DECLARE_DATA   want_digest_module =
+module AP_MODULE_DECLARE_DATA want_digest_filter_module =
 {
     STANDARD20_MODULE_STUFF,
     NULL,            // Per-directory configuration handler
