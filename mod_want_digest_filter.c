@@ -60,6 +60,17 @@ typedef struct st_sha {
     apr_sha1_ctx_t sha1;
 } st_sha;
 
+// struct for saving the filter context.
+typedef struct want_digest_ctx {
+    st_md5 *md5_ctx;
+    st_sha *sha_ctx;
+    apr_bucket_brigade *bb;
+    size_t adler;
+    const char *filename;
+    apr_off_t remaining;
+    int seen_eos;
+} want_digest_ctx;
+
 // calculates the md5 digest of a file and adds it to headers_out
 void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_MD5_DIGESTSIZE];
@@ -361,82 +372,149 @@ static int want_digest_get(request_rec *r)
 
 // when the input filter function is added to the filter chain on PUT it calculates the hashes of the file
 // on-the-fly and stores them as files in a replicated directory tree outside of the directory served by WebDAV. 
-static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *bb)
-                                             //ap_input_mode_t mode,
-                                             //apr_read_type_e block,
-                                             //apr_off_t readbytes)
+static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *bb,
+                                             ap_input_mode_t mode,
+                                             apr_read_type_e block,
+                                             apr_off_t readbytes)
 {
     apr_bucket *bucket;
     apr_status_t rv;
-    const char *data, *filename;
+    const char *data;
     apr_size_t len;
+    // the context for this filter
+    want_digest_ctx *ctx = f->ctx;
+    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                 "entered want_digest_put_filter.");
 
-    filename = f->r->filename;
-
-    st_md5 *md5_data = apr_palloc(f->r->pool, sizeof(*md5_data));
-    apr_md5_init(&(md5_data->md5));
-
-    st_sha *sha_data = apr_palloc(f->r->pool, sizeof(*sha_data));
-    apr_sha1_init(&(sha_data->sha1));
-
-    size_t adler = adler32_z(0L, Z_NULL, 0);
-
-    // get the buckets one by one
-    for (bucket = APR_BRIGADE_FIRST(bb);
-         bucket != APR_BRIGADE_SENTINEL(bb);
-         bucket = APR_BUCKET_NEXT(bucket))
+    if (mode != AP_MODE_READBYTES) 
     {
-        if (APR_BUCKET_IS_EOS(bucket))
-        {
-            // finalize hashes and write output files
-            // MD5
-            apr_md5_final(md5_data->digest, &(md5_data->md5));
-            apr_sha1_final(sha_data->digest, &(sha_data->sha1));
-            //ADLER32 is already finished at this point.
-            
-            // rewrite binary form of digests into readable string output
-            for (int i = 0; i<sizeof(md5_data->digest); i++)
-            {
-               snprintf(&(md5_data->hex_digest[i*2]), sizeof(md5_data->hex_digest)-(i*2), "%02x", md5_data->digest[i]); 
-            }
-            md5_data->hex_digest[sizeof(md5_data->hex_digest)-1] = '\0';
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "mode was not readbytes.");
+        return ap_get_brigade(f->next, bb, mode, block, readbytes);
+    }
 
-            for (int i = 0; i<sizeof(sha_data->digest); i++)
-            {
-               snprintf(&sha_data->hex_digest[i*2], sizeof(sha_data->hex_digest)-(i*2), "%02x", sha_data->digest[i]); 
-            }
-            sha_data->hex_digest[sizeof(sha_data->hex_digest)-1] = '\0';
-
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", filename, md5_data->hex_digest, sha_data->hex_digest, adler);
-           
-            // now to save the hashes somwhere!
-            return ap_pass_brigade(f->next, bb);
-        }
-        else if (APR_BUCKET_IS_METADATA(bucket))
+    if (!ctx)
+    {
+        ctx = f->ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
+        ctx-> md5_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->md5_ctx));
+        ctx-> sha_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->sha_ctx));
+        //st_md5 *md5_data = apr_palloc(f->r->pool, sizeof(*md5_data));
+        //st_sha *sha_data = apr_palloc(f->r->pool, sizeof(*sha_data));
+        ctx->filename = f->r->filename;
+        ctx->bb = apr_brigade_create(f->r->pool, f->c->bucket_alloc);
+        apr_md5_init(&(ctx->md5_ctx->md5));
+        apr_sha1_init(&(ctx->sha_ctx->sha1));
+        ctx->adler = adler32_z(0L, Z_NULL, 0);
+        ctx->seen_eos = 0;
+        ctx->remaining = 0;
+        if (apr_table_get(f->r->headers_in, "Content-Length"))
         {
-            continue;
-        }
-        else
-        {
-            rv = apr_bucket_read(bucket, &data, &len, APR_NONBLOCK_READ);
-            if (rv != APR_SUCCESS)
-            {
-                //error
-                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                             "Could not read from bucket...");
-                return 500;
-            }
-            //update all hashes here!
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "bucket: %s", data);
-            apr_md5_update(&(md5_data->md5), data, len);
-            apr_sha1_update(&(sha_data->sha1), data, len);
-            adler = adler32_z(adler, data, len);
+            ctx->remaining = atoi(apr_table_get(f->r->headers_in, "Content-Length"));
         }
     }
 
-    return APR_EGENERAL;
+    while (APR_BRIGADE_EMPTY(ctx->bb))
+    {
+        apr_brigade_cleanup(ctx->bb);
+        rv = ap_get_brigade(f->next,ctx->bb,mode,block,readbytes);
+        if (rv != APR_SUCCESS) return rv;
+
+        // get the buckets one by one
+        for (bucket = APR_BRIGADE_FIRST(ctx->bb);
+             bucket != APR_BRIGADE_SENTINEL(ctx->bb);
+             bucket = APR_BUCKET_NEXT(bucket))
+
+        {
+
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "entered for loop.");
+
+            if (APR_BUCKET_IS_EOS(bucket))
+            {
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "entered finishing phase.");
+                // finalize hashes and write output files
+                // MD5
+                apr_md5_final(ctx->md5_ctx->digest, &(ctx->md5_ctx->md5));
+                apr_sha1_final(ctx->sha_ctx->digest, &(ctx->sha_ctx->sha1));
+                //ADLER32 is already finished at this point.
+                
+                // rewrite binary form of digests into readable string output
+                for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
+                {
+                   snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
+                }
+                ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
+
+                for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
+                {
+                   snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
+                }
+                ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
+
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", ctx->filename, ctx->md5_ctx->hex_digest, ctx->sha_ctx->hex_digest, ctx->adler);
+                
+                // now to save the hashes somwhere!
+                
+                // step aside
+                ap_remove_input_filter(f);
+                break;
+            }
+            else if (APR_BUCKET_IS_METADATA(bucket))
+            {
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "seen_metadata bucket.");
+                continue;
+            }
+            else if (ctx->remaining < 0)
+            {
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "ctx->remaining < 0");
+                break;
+            }
+            else
+            {
+                rv = apr_bucket_read(bucket, &data, &len, block);
+                if (rv != APR_SUCCESS)
+                {
+                    //error
+                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                                 "Could not read from bucket...");
+                    return rv;
+                }
+                //update all hashes here!
+                //ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                //            "bucket: %s", data);
+                apr_md5_update(&(ctx->md5_ctx->md5), data, len);
+                apr_sha1_update(&(ctx->sha_ctx->sha1), data, len);
+                ctx->adler = adler32_z(ctx->adler, data, len);
+                ctx->remaining -= len;
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "updated hashes.");
+
+            }
+        }
+    }
+
+    if (!APR_BRIGADE_EMPTY(ctx->bb))
+    {
+        apr_bucket *b = NULL;
+        if (apr_brigade_partition(ctx->bb, readbytes, &b) == APR_INCOMPLETE)
+        {
+            APR_BRIGADE_CONCAT(bb, ctx->bb);
+        }
+        else
+        {
+            APR_BRIGADE_CONCAT(bb, ctx->bb);
+            apr_brigade_split_ex(bb, b, ctx->bb);
+        }
+    }    
+
+    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                 "reached end of filter, returning bb to next.");
+    return ap_get_brigade(f->next, bb, mode, block, readbytes);
+    //return APR_SUCCESS;
 }
 
 // when it is added on a DELETE, it takes care of deleting the previously hashed files and the directory if it is empty.
@@ -465,7 +543,7 @@ static apr_status_t want_digest_get_filter(ap_filter_t *f, apr_bucket_brigade *b
 static void insert_filter(request_rec *r){
     
     if (r->method_number == M_PUT ){
-        ap_add_output_filter_handle(filter_handle_put, NULL, r, r->connection);
+        ap_add_input_filter_handle(filter_handle_put, NULL, r, r->connection);
     }
     if (r->method_number == M_DELETE) {
         ap_add_output_filter_handle(filter_handle_delete, NULL, r, r->connection);
@@ -480,7 +558,7 @@ static void register_hooks(apr_pool_t *pool)
 {
     // register and add in/output filters
     filter_handle_put = 
-        ap_register_output_filter(filter_name_put, want_digest_put_filter, NULL, AP_FTYPE_RESOURCE);
+        ap_register_input_filter(filter_name_put, want_digest_put_filter, NULL, AP_FTYPE_RESOURCE);
     filter_handle_delete = 
         ap_register_output_filter(filter_name_delete, want_digest_delete_filter, NULL, AP_FTYPE_RESOURCE);
     filter_handle_get = 
