@@ -29,6 +29,7 @@
 #include "zlib.h"
 #include "libgen.h"
 
+module AP_MODULE_DECLARE_DATA want_digest_filter_module;
 /* Define prototypes of our functions in this module */
 //static void register_hooks(apr_pool_t *pool);
 //static int want_digest_handler(request_rec *r);
@@ -60,6 +61,12 @@ typedef struct st_sha {
     apr_sha1_ctx_t sha1;
 } st_sha;
 
+// per-dir config with root path to hash storage dir
+typedef struct wd_dir_config {
+    char *wd_hash_path;
+    char *error;
+} wd_dir_config;
+
 // struct for saving the filter context.
 typedef struct want_digest_ctx {
     st_md5 *md5_ctx;
@@ -67,6 +74,7 @@ typedef struct want_digest_ctx {
     apr_bucket_brigade *bb;
     size_t adler;
     const char *filename;
+    char *hash_path_root;
     apr_off_t remaining;
     int seen_eos;
 } want_digest_ctx;
@@ -386,6 +394,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                  "entered want_digest_put_filter.");
 
+    wd_dir_config *cfg = ap_get_module_config(f->r->per_dir_config,
+                                        &want_digest_filter_module);
+
     if (mode != AP_MODE_READBYTES) 
     {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
@@ -398,10 +409,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         ctx = f->ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
         ctx-> md5_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->md5_ctx));
         ctx-> sha_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->sha_ctx));
-        //st_md5 *md5_data = apr_palloc(f->r->pool, sizeof(*md5_data));
-        //st_sha *sha_data = apr_palloc(f->r->pool, sizeof(*sha_data));
-        ctx->filename = f->r->filename;
         ctx->bb = apr_brigade_create(f->r->pool, f->c->bucket_alloc);
+        ctx->filename = f->r->filename;
+        ctx->hash_path_root = cfg->wd_hash_path;
         apr_md5_init(&(ctx->md5_ctx->md5));
         apr_sha1_init(&(ctx->sha_ctx->sha1));
         ctx->adler = adler32_z(0L, Z_NULL, 0);
@@ -553,6 +563,21 @@ static void insert_filter(request_rec *r){
     }
 }
 
+static const char *wd_cmd_func(cmd_parms *cmd, void *config, const char *arg1)
+{
+    wd_dir_config *cfg = (wd_dir_config *)config;
+    if (arg1 != NULL)
+    {
+        cfg->wd_hash_path = (char *)arg1;
+    }
+    else
+    {
+        return apr_psprintf(cmd->temp_pool,
+                           "No root directory for digest caching configured!");
+    }
+    return NULL;
+}
+
 /* register_hooks: Adds a hook to the httpd process */
 static void register_hooks(apr_pool_t *pool) 
 {
@@ -567,14 +592,26 @@ static void register_hooks(apr_pool_t *pool)
     ap_hook_insert_filter(insert_filter, NULL, NULL, APR_HOOK_LAST);
 }
 
+static void *create_per_dir_config(apr_pool_t *p, char *s)
+{
+    wd_dir_config *cfg = apr_pcalloc(p, sizeof(wd_dir_config));
+    return cfg;
+}
+
+static const command_rec wd_commands[] = {
+    AP_INIT_TAKE1("DigestRootDir", wd_cmd_func, NULL, ACCESS_CONF,
+                  "Specify the root directory for storing cached digests."),
+    {NULL}
+};
+
 /* Define our module as an entity and assign a function for registering hooks  */
 module AP_MODULE_DECLARE_DATA want_digest_filter_module =
 {
     STANDARD20_MODULE_STUFF,
-    NULL,            // Per-directory configuration handler
+    create_per_dir_config, // Per-directory configuration handler
     NULL,            // Merge handler for per-directory configurations
     NULL,            // Per-server configuration handler
     NULL,            // Merge handler for per-server configurations
-    NULL,            // Any directives we may have for httpd
+    wd_commands,            // Any directives we may have for httpd
     register_hooks   // Our hook registering function
 };
