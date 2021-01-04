@@ -71,7 +71,7 @@ typedef struct wd_dir_config {
 typedef struct want_digest_ctx {
     st_md5 *md5_ctx;
     st_sha *sha_ctx;
-    apr_bucket_brigade *bb;
+    //apr_bucket_brigade *bb;
     size_t adler;
     const char *filename;
     char *digest_root_dir;
@@ -406,80 +406,97 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
 
     if (!ctx)
     {
+        // allocate context
         ctx = f->ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
+        // allocate hash ctx for md5 and sha and intialize all three
         ctx->md5_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->md5_ctx));
         ctx->sha_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->sha_ctx));
-        ctx->bb = apr_brigade_create(f->r->pool, f->c->bucket_alloc);
-        ctx->filename = f->r->filename;
-        ctx->digest_root_dir = cfg->digest_root_dir;
         apr_md5_init(&(ctx->md5_ctx->md5));
         apr_sha1_init(&(ctx->sha_ctx->sha1));
         ctx->adler = adler32_z(0L, Z_NULL, 0);
+        // create bucket brigade
+        //ctx->bb = apr_brigade_create(f->r->pool, f->c->bucket_alloc);
+        // further ctx
+        ctx->filename = f->r->filename;
+        ctx->digest_root_dir = cfg->digest_root_dir;
         ctx->seen_eos = 0;
         ctx->remaining = 0;
         if (apr_table_get(f->r->headers_in, "Content-Length"))
         {
             ctx->remaining = atoi(apr_table_get(f->r->headers_in, "Content-Length"));
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "ctx->remaining = %lu.", ctx->remaining);
+        }
+        else
+        {
+            ap_remove_input_filter(f);
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "No content-length given, stepping aside.");
+            return APR_SUCCESS;
         }
     }
 
-    //apr_brigade_cleanup(ctx->bb);
-    rv = ap_get_brigade(f->next,ctx->bb,mode,block,readbytes);
+    if (ctx->remaining == 0 || ctx->seen_eos == 1)
+    {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "entered finishing phase.");
+        // finalize hashes and write output files
+        // MD5
+        apr_md5_final(ctx->md5_ctx->digest, &(ctx->md5_ctx->md5));
+        // SHA
+        apr_sha1_final(ctx->sha_ctx->digest, &(ctx->sha_ctx->sha1));
+        //ADLER32 is already finished at this point.
+        
+        // rewrite binary form of digests into readable string output
+        for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
+        {
+           snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
+        }
+        ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
+
+        for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
+        {
+           snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
+        }
+        ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
+
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", ctx->filename, ctx->md5_ctx->hex_digest, ctx->sha_ctx->hex_digest, ctx->adler);
+        
+        // now to save the hashes somwhere!
+        
+        // step aside
+        ap_remove_input_filter(f);
+        return APR_SUCCESS;
+    }
+
+    //apr_brigade_cleanup(bb);
+    rv = ap_get_brigade(f->next,bb,mode,block,readbytes);
     if (rv != APR_SUCCESS) return rv;
 
     // get the buckets one by one
-    for (bucket = APR_BRIGADE_FIRST(ctx->bb);
-         bucket != APR_BRIGADE_SENTINEL(ctx->bb);
+    for (bucket = APR_BRIGADE_FIRST(bb);
+         bucket != APR_BRIGADE_SENTINEL(bb);
          bucket = APR_BUCKET_NEXT(bucket))
 
     {
 
-        if (APR_BUCKET_IS_EOS(bucket))
+        if (APR_BUCKET_IS_EOS(bucket) || ctx->remaining == 0)
         {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "entered finishing phase.");
-            // finalize hashes and write output files
-            // MD5
-            apr_md5_final(ctx->md5_ctx->digest, &(ctx->md5_ctx->md5));
-            // SHA
-            apr_sha1_final(ctx->sha_ctx->digest, &(ctx->sha_ctx->sha1));
-            //ADLER32 is already finished at this point.
-            
-            // rewrite binary form of digests into readable string output
-            for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
-            {
-               snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
-            }
-            ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
-
-            for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
-            {
-               snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
-            }
-            ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
-
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", ctx->filename, ctx->md5_ctx->hex_digest, ctx->sha_ctx->hex_digest, ctx->adler);
-            
-            // now to save the hashes somwhere!
-            
-            // step aside
-            APR_BRIGADE_INSERT_TAIL(ctx->bb, bucket);
-            ap_remove_input_filter(f);
+            ctx->seen_eos = 1;
             break;
         }
         else if (APR_BUCKET_IS_METADATA(bucket))
         {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                          "seen_metadata bucket.");
-            APR_BRIGADE_INSERT_TAIL(ctx->bb, bucket);
+            APR_BRIGADE_INSERT_TAIL(bb, bucket);
             continue;
         }
         else if (ctx->remaining < 0)
         {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                          "ctx->remaining < 0");
-            APR_BRIGADE_INSERT_TAIL(ctx->bb, bucket);
             ap_remove_input_filter(f);
             break;
         }
@@ -495,36 +512,35 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
             }
             //update all hashes here!
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                        "bucket: %s", data);
+                        "len: %lu", len);
             apr_md5_update(&(ctx->md5_ctx->md5), data, len);
             apr_sha1_update(&(ctx->sha_ctx->sha1), data, len);
             ctx->adler = adler32_z(ctx->adler, data, len);
-            //ctx->remaining -= len;
-            APR_BRIGADE_INSERT_TAIL(ctx->bb, bucket);
+            ctx->remaining -= len;
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "updated hashes.");
+                         "updated hashes, ctx->remaining = %lu.", ctx->remaining);
 
         }
     }
 
-//    if (!APR_BRIGADE_EMPTY(ctx->bb))
+//    if (!APR_BRIGADE_EMPTY(bb))
 //    {
 //        apr_bucket *b = NULL;
-//        if (apr_brigade_partition(ctx->bb, readbytes, &b) == APR_INCOMPLETE)
+//        if (apr_brigade_partition(bb, readbytes, &b) == APR_INCOMPLETE)
 //        {
-//            APR_BRIGADE_CONCAT(bb, ctx->bb);
+//            APR_BRIGADE_CONCAT(bb, bb);
 //        }
 //        else
 //        {
-//            APR_BRIGADE_CONCAT(bb, ctx->bb);
-//            apr_brigade_split_ex(bb, b, ctx->bb);
+//            APR_BRIGADE_CONCAT(bb, bb);
+//            apr_brigade_split_ex(bb, b, bb);
 //        }
 //    }    
 
     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                  "reached end of filter, returning bb to next.");
-    return ap_get_brigade(f->next, ctx->bb, mode, block, readbytes);
-    //return APR_SUCCESS;
+    //return ap_get_brigade(f->next, bb, mode, block, readbytes);
+    return APR_SUCCESS;
 }
 
 // when it is added on a DELETE, it takes care of deleting the previously hashed files and the directory if it is empty.
