@@ -388,6 +388,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     apr_bucket *bucket;
     apr_status_t rv;
     const char *data;
+    char *filepath, *filename, *path, *new_path;
     apr_size_t len;
     // the context for this filter
     want_digest_ctx *ctx = f->ctx;
@@ -463,7 +464,45 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                      "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", ctx->filename, ctx->md5_ctx->hex_digest, ctx->sha_ctx->hex_digest, ctx->adler);
         
-        // now to save the hashes somwhere!
+        // now to save the hashes somewhere!
+        // extract basename and dirname
+        filename = basename((char*)ctx->filename);
+        path = dirname((char*)ctx->filename);
+
+        new_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, path, NULL);
+
+        // create directory recursively to store the file's hashes
+        if (apr_dir_make_recursive(new_path, APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+
+        // prepare paths
+        apr_file_t *fhandle;
+        char *md5_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".md5", NULL);
+        apr_size_t md5_len = sizeof(ctx->md5_ctx->hex_digest);
+        char *sha_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".sha", NULL);
+        apr_size_t sha_len = sizeof(ctx->sha_ctx->hex_digest);
+        char *adler32_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".adler32", NULL);
+        char adler32[sizeof(ctx->adler)+1];
+        snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
+        apr_size_t adler32_len = sizeof(adler32);
+
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "adler32: %s", adler32);
+
+        // create and write files
+        if (apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_file_write(fhandle, &ctx->md5_ctx->hex_digest, &md5_len) != APR_SUCCESS) return 500;
+        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
+        
+        if (apr_file_open(&fhandle, sha_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_file_write(fhandle, &ctx->sha_ctx->hex_digest, &sha_len) != APR_SUCCESS) return 500;
+        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
+
+        if (apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_file_write(fhandle, &adler32, &adler32_len) != APR_SUCCESS) return 500;
+        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
+
+        
+        // hashes saved
         
         // step aside
         ap_remove_input_filter(f);
