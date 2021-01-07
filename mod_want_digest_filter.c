@@ -292,10 +292,10 @@ static int want_digest_get(request_rec *r)
         digest_string = get_entry(r->pool, new, digest_string);
     }
 
-    // Digest hasn't been cached, so calculate it
+    // Check for each algorithm if digest has been cached, if so, return from cache, otherwise calculate it
     
     digest_algorithm *digests_to_calc = (digest_algorithm *) wanted_digests->elts;
-    for(int i=0; i<wanted_digests->nelts;i++)
+    for(int i=0; i<wanted_digests->nelts; i++)
     { 
     
     // Which digest type are we looking at here?
@@ -565,7 +565,68 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
 // when it is added on a DELETE, it takes care of deleting the previously hashed files and the directory if it is empty.
 static apr_status_t want_digest_delete(request_rec *r)
 {
-    return APR_SUCCESS;
+    int rv, empty;
+    apr_finfo_t finfo;
+    apr_dir_t *dir;
+    char *filename, *digest_root_dir, *path, *delete_path;
+    // get filename from request
+    filename = apr_pstrdup(r->pool, r->filename);
+
+    // get DigestRootDir from cfg
+    wd_dir_config *cfg = ap_get_module_config(r->per_dir_config,
+                                        &want_digest_filter_module);
+    digest_root_dir = cfg->digest_root_dir;
+
+    // build paths for eventually cached digests
+    char *md5_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".md5", NULL);
+    char *sha_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".sha", NULL);
+    char *adler_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".adler32", NULL);
+
+    // check if digests are cached for this file and delete them if they exist.
+    rv = apr_stat(&finfo, md5_filename, APR_FINFO_NORM, r->pool);
+    if (rv == APR_SUCCESS)
+    {
+        rv = apr_file_remove(md5_filename, r->pool);
+    }
+    rv = apr_stat(&finfo, sha_filename, APR_FINFO_NORM, r->pool);
+    if (rv == APR_SUCCESS)
+    {
+        rv = apr_file_remove(sha_filename, r->pool);
+    }
+    rv = apr_stat(&finfo, adler_filename, APR_FINFO_NORM, r->pool);
+    if (rv == APR_SUCCESS)
+    {
+        rv = apr_file_remove(adler_filename, r->pool);
+    }
+
+    path = dirname((char*)filename);
+    delete_path = apr_pstrcat(r->pool, digest_root_dir, path, NULL);
+    // check if directory is empty, if yes, delete it.
+    // ideally, we would employ a function that checks the complete directory
+    // tree up to digest_root_dir and deletes all empty directories on the way.
+    // for now it just deletes the bottom-most directory.
+    rv = apr_dir_open(&dir, delete_path, r->pool);
+    int count = 0;
+    empty=1;
+    while ((rv = apr_dir_read(&finfo,APR_FINFO_NAME, dir)) == APR_SUCCESS)
+    {
+        count++;
+        if (count > 2)
+        {
+            // directory contains more than just . and .., not empty!
+            empty=0;
+            break;
+        }
+    }
+    rv = apr_dir_close(dir);
+
+    if (empty=1)
+    {
+        // dir is empty, remove it.
+        rv = apr_dir_remove(delete_path, r->pool);
+    }
+
+    return DECLINED;
 }
 
 static void insert_filter(request_rec *r){
