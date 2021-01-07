@@ -71,7 +71,6 @@ typedef struct wd_dir_config {
 typedef struct want_digest_ctx {
     st_md5 *md5_ctx;
     st_sha *sha_ctx;
-    //apr_bucket_brigade *bb;
     size_t adler;
     const char *filename;
     char *digest_root_dir;
@@ -251,76 +250,41 @@ static const char *get_entry(apr_pool_t *p, digest_algorithm *result,
     return accept_line;
 }
 
-
-static int want_digest_put(request_rec *r)
-{
-    char *filepath, *filename, *path, *new_path;
-    char *hashpath = "/var/www/hashes";
-    int len;
-    apr_status_t status;
-
-    // filename in the request
-    filepath = apr_pstrdup(r->pool, r->filename);
-    // extract basename
-    filename = basename(filepath);
-    path = dirname(filepath);
-
-    // get the path prefix for storing the hashes
-    //status = apr_env_get(&hashpath, "HASHPATH", r->pool);
-    //if (status != APR_SUCCESS) {
-    //    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-    //                 "error in getting hashpath from env.");
-    //    return 500;
-    //}
-
-    //len = sizeof(hashpath);
-    //if (hashpath[len-1] =! '/'){
-    //    new_path = apr_pstrcat(r->pool, hashpath, '/', path, NULL);
-    //}
-    //else {
-        new_path = apr_pstrcat(r->pool, hashpath, path, NULL);
-    //}
-
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                 "hashpath: %s, new_path: %s", hashpath, new_path);
-
-    // create directory recursively to store the file's hashes
-    status = apr_dir_make_recursive(new_path, APR_FPROT_OS_DEFAULT, r->pool);
-    if (status != APR_SUCCESS) {
-        return 500;
-    }
-
-    // create hash files in new_path
-
-    return DECLINED;
-}
-
-static int want_digest_delete(request_rec *r)
-{
-    return DECLINED;
-}
-
 // the handler function that takes care of the request.
 static int want_digest_get(request_rec *r)
 {
     // variables
-    int rc, exists;
+    int rc, file_exists, hash_exists;
     apr_finfo_t finfo;
     apr_file_t* file;
-    char *filename;
+    char *filename, *hash_filename;
     char buffer[512];
     apr_size_t readBytes = 256;
     int n, num_digests;
     const char* digest_string;
 
     // check incoming headers
-    if (apr_table_get(r->headers_in, "Want-Digest") != NULL){
-        digest_string = apr_table_get(r->headers_in, "Want-Digest");
-    }
-    else {
-        return (DECLINED);
-    }
+    if (NULL == (digest_string = apr_table_get(r->headers_in, "Want-Digest"))) return DECLINED;
 
+    // Figure out which file is being requested
+    filename = apr_pstrdup(r->pool, r->filename);
+
+    // Check if the file a digest is requested for exists and that it isn't a directory, otherwise don't serve the request
+    rc = apr_stat(&finfo, filename, APR_FINFO_NORM, r->pool);
+    if (rc == APR_SUCCESS) 
+    {
+        file_exists = ( !(finfo.filetype & APR_NOFILE) && !(finfo.filetype & APR_DIR));
+        if (!file_exists) return HTTP_NOT_FOUND; // Return a 404 if not found.
+    }
+    else if (rc == 2) return HTTP_NOT_FOUND; // If apr_stat returns 2, the file does not exist. same return value as the system function stat.
+    else return HTTP_FORBIDDEN; // If apr_stat failed, we're probably not allowed to check this file.
+
+    // get DigestRootDir from cfg
+    wd_dir_config *cfg = ap_get_module_config(r->per_dir_config,
+                                        &want_digest_filter_module);
+    char *digest_root_dir = cfg->digest_root_dir;
+
+    // sort wanted digests into array for processing and check if chached hashes exist.
     apr_array_header_t *wanted_digests;
     wanted_digests = apr_array_make(r->pool, 40, sizeof(digest_algorithm));
     while(*digest_string){
@@ -328,48 +292,108 @@ static int want_digest_get(request_rec *r)
         digest_string = get_entry(r->pool, new, digest_string);
     }
 
-    // Figure out which file is being requested
-    filename = apr_pstrdup(r->pool, r->filename);
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                 "filename requested: %s", filename);
-
-    
-    // Figure out if the file we request a sum on exists and isn't a directory
-    rc = apr_stat(&finfo, filename, APR_FINFO_NORM, r->pool);
-    if (rc == APR_SUCCESS) {
-        exists = ( !(finfo.filetype & APR_NOFILE) && !(finfo.filetype & APR_DIR));
-        if (!exists) return HTTP_NOT_FOUND; // Return a 404 if not found.
-        
-    } else if (rc == 2) {
-        return HTTP_NOT_FOUND; // If apr_stat returns 2, the file does not exist. same return value as the system function stat.
-
-    } else {
-        return HTTP_FORBIDDEN; // If apr_stat failed, we're probably not allowed to check this file.
-    }
+    // Digest hasn't been cached, so calculate it
     
     digest_algorithm *digests_to_calc = (digest_algorithm *) wanted_digests->elts;
-    for(int i=0; i<wanted_digests->nelts;i++){
+    for(int i=0; i<wanted_digests->nelts;i++)
+    { 
+    
+    // Which digest type are we looking at here?
+        if (!strcasecmp(digests_to_calc[i].name, "md5"))
+        {
+            hash_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".md5", NULL);
+            hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
+            if (hash_exists == 0)
+            {
+                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    char final_digest[finfo.size+4];
+                    char hash_buf[finfo.size];
+                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    sprintf(&final_digest[0], "MD5=%s", hash_buf);
 
-        rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
-        if (rc == APR_SUCCESS) {
-        
-        // Which digest type are we looking at here?
-            if (!strcasecmp(digests_to_calc[i].name, "md5")) {
-                calculate_md5(r, file, buffer, readBytes);
-
-            } else if (!strcasecmp(digests_to_calc[i].name, "sha")) {
-                calculate_sha(r, file, buffer, readBytes);
-
-            } else if (!strcasecmp(digests_to_calc[i].name, "adler32")) {
-                calculate_adler32(r, file, buffer, readBytes);
-
-            } else {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                         "digestType: %s unknown, no header returned.", digest_string);
+                    apr_table_add(r->headers_out, "Digest", final_digest); 
+                }
+                else return 500;
+                apr_file_close(file);
+            }
+            else
+            {
+                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    calculate_md5(r, file, buffer, readBytes);
+                }
+                else return 500;
+                apr_file_close(file);
             }
         }
+        else if (!strcasecmp(digests_to_calc[i].name, "sha")) 
+        {
+            hash_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".sha", NULL);
+            hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
+            if (hash_exists == 0)
+            {
+                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    char final_digest[finfo.size+4];
+                    char hash_buf[finfo.size];
+                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    sprintf(&final_digest[0], "SHA=%s", hash_buf);
 
-        apr_file_close(file);
+                    apr_table_add(r->headers_out, "Digest", final_digest); 
+                }
+                else return 500;
+                apr_file_close(file);
+            }
+            else
+            {
+                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    calculate_sha(r, file, buffer, readBytes);
+                }
+                else return 500;
+                apr_file_close(file);
+            }
+        }
+        else if (!strcasecmp(digests_to_calc[i].name, "adler32"))
+        {
+            hash_filename = apr_pstrcat(r->pool, digest_root_dir, filename, ".adler32", NULL);
+            hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
+            if (hash_exists == 0)
+            {
+                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    char final_digest[finfo.size+8];
+                    char hash_buf[finfo.size];
+                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    sprintf(&final_digest[0], "ADLER32=%s", hash_buf);
+
+                    apr_table_add(r->headers_out, "Digest", final_digest); 
+                }
+                else return 500;
+                apr_file_close(file);
+            }
+            else
+            {
+                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rc == APR_SUCCESS)
+                {
+                    calculate_adler32(r, file, buffer, readBytes);
+                }
+                else return 500;
+                apr_file_close(file);
+            }
+        }
+        else
+        {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
+                     "digestType: %s unknown, no header returned.", digest_string);
+        }
     }
 
     // Let Apache know that we responded to this request.
@@ -392,9 +416,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     apr_size_t len;
     // the context for this filter
     want_digest_ctx *ctx = f->ctx;
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                 "entered want_digest_put_filter.");
-
+    // per-dir config
     wd_dir_config *cfg = ap_get_module_config(f->r->per_dir_config,
                                         &want_digest_filter_module);
 
@@ -407,7 +429,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
 
     if (!ctx)
     {
-        // allocate context
+        // allocate context itself
         ctx = f->ctx = apr_pcalloc(f->r->pool, sizeof(*ctx));
         // allocate hash ctx for md5 and sha and intialize all three
         ctx->md5_ctx = apr_pcalloc(f->r->pool, sizeof(*ctx->md5_ctx));
@@ -415,8 +437,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_md5_init(&(ctx->md5_ctx->md5));
         apr_sha1_init(&(ctx->sha_ctx->sha1));
         ctx->adler = adler32_z(0L, Z_NULL, 0);
-        // create bucket brigade
-        //ctx->bb = apr_brigade_create(f->r->pool, f->c->bucket_alloc);
         // further ctx
         ctx->filename = f->r->filename;
         ctx->digest_root_dir = cfg->digest_root_dir;
@@ -425,8 +445,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_table_get(f->r->headers_in, "Content-Length"))
         {
             ctx->remaining = atoi(apr_table_get(f->r->headers_in, "Content-Length"));
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "ctx->remaining = %lu.", ctx->remaining);
         }
         else
         {
@@ -437,10 +455,53 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         }
     }
 
+    rv = ap_get_brigade(f->next,bb,mode,block,readbytes);
+    if (rv != APR_SUCCESS) return rv;
+
+    // get the buckets one by one
+    for (bucket = APR_BRIGADE_FIRST(bb);
+         bucket != APR_BRIGADE_SENTINEL(bb);
+         bucket = APR_BUCKET_NEXT(bucket))
+
+    {
+
+        if (APR_BUCKET_IS_EOS(bucket) || ctx->remaining == 0)
+        {
+            ctx->seen_eos = 1;
+            break;
+        }
+        else if (APR_BUCKET_IS_METADATA(bucket))
+        {
+            continue;
+        }
+        else if (ctx->remaining < 0)
+        {
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "ctx->remaining < 0");
+            ap_remove_input_filter(f);
+            break;
+        }
+        else
+        {
+            rv = apr_bucket_read(bucket, &data, &len, block);
+            if (rv != APR_SUCCESS)
+            {
+                //error
+                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                             "Could not read from bucket...");
+                return rv;
+            }
+            //update all hashes here!
+            apr_md5_update(&(ctx->md5_ctx->md5), data, len);
+            apr_sha1_update(&(ctx->sha_ctx->sha1), data, len);
+            ctx->adler = adler32_z(ctx->adler, data, len);
+            ctx->remaining -= len;
+
+        }
+    }
+
     if (ctx->remaining == 0 || ctx->seen_eos == 1)
     {
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "entered finishing phase.");
         // finalize hashes and write output files
         // MD5
         apr_md5_final(ctx->md5_ctx->digest, &(ctx->md5_ctx->md5));
@@ -460,9 +521,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
            snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
         }
         ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
-
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "Digests for file %s: MD5=%s, SHA=%s, ADLER32=%lx", ctx->filename, ctx->md5_ctx->hex_digest, ctx->sha_ctx->hex_digest, ctx->adler);
         
         // now to save the hashes somewhere!
         // extract basename and dirname
@@ -485,9 +543,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
         apr_size_t adler32_len = sizeof(adler32);
 
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "adler32: %s", adler32);
-
         // create and write files
         if (apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
         if (apr_file_write(fhandle, &ctx->md5_ctx->hex_digest, &md5_len) != APR_SUCCESS) return 500;
@@ -500,109 +555,17 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
         if (apr_file_write(fhandle, &adler32, &adler32_len) != APR_SUCCESS) return 500;
         if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
-
-        
-        // hashes saved
         
         // step aside
         ap_remove_input_filter(f);
-        return APR_SUCCESS;
     }
-
-    //apr_brigade_cleanup(bb);
-    rv = ap_get_brigade(f->next,bb,mode,block,readbytes);
-    if (rv != APR_SUCCESS) return rv;
-
-    // get the buckets one by one
-    for (bucket = APR_BRIGADE_FIRST(bb);
-         bucket != APR_BRIGADE_SENTINEL(bb);
-         bucket = APR_BUCKET_NEXT(bucket))
-
-    {
-
-        if (APR_BUCKET_IS_EOS(bucket) || ctx->remaining == 0)
-        {
-            ctx->seen_eos = 1;
-            break;
-        }
-        else if (APR_BUCKET_IS_METADATA(bucket))
-        {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "seen_metadata bucket.");
-            APR_BRIGADE_INSERT_TAIL(bb, bucket);
-            continue;
-        }
-        else if (ctx->remaining < 0)
-        {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "ctx->remaining < 0");
-            ap_remove_input_filter(f);
-            break;
-        }
-        else
-        {
-            rv = apr_bucket_read(bucket, &data, &len, block);
-            if (rv != APR_SUCCESS)
-            {
-                //error
-                ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                             "Could not read from bucket...");
-                return rv;
-            }
-            //update all hashes here!
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                        "len: %lu", len);
-            apr_md5_update(&(ctx->md5_ctx->md5), data, len);
-            apr_sha1_update(&(ctx->sha_ctx->sha1), data, len);
-            ctx->adler = adler32_z(ctx->adler, data, len);
-            ctx->remaining -= len;
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                         "updated hashes, ctx->remaining = %lu.", ctx->remaining);
-
-        }
-    }
-
-//    if (!APR_BRIGADE_EMPTY(bb))
-//    {
-//        apr_bucket *b = NULL;
-//        if (apr_brigade_partition(bb, readbytes, &b) == APR_INCOMPLETE)
-//        {
-//            APR_BRIGADE_CONCAT(bb, bb);
-//        }
-//        else
-//        {
-//            APR_BRIGADE_CONCAT(bb, bb);
-//            apr_brigade_split_ex(bb, b, bb);
-//        }
-//    }    
-
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                 "reached end of filter, returning bb to next.");
-    //return ap_get_brigade(f->next, bb, mode, block, readbytes);
     return APR_SUCCESS;
 }
 
 // when it is added on a DELETE, it takes care of deleting the previously hashed files and the directory if it is empty.
-static apr_status_t want_digest_delete_filter(ap_filter_t *f, apr_bucket_brigade *bb)
-                                            // ap_input_mode_t mode,
-                                            // apr_read_type_e block,
-                                            // apr_off_t readbytes)
+static apr_status_t want_digest_delete(request_rec *r)
 {
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                 "called delete_filter.");
-   
-    return ap_pass_brigade(f->next, bb);
-}
-
-// the output filter checks if hashes are calculated and if they are, it just adds them to r->headers_out,
-// otherwise it calculates and stores the hashes. can we get it to reuse the funcitonality of
-// want_digest_put_filter?
-static apr_status_t want_digest_get_filter(ap_filter_t *f, apr_bucket_brigade *bb)
-{
-    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                 "called get_filter.");
-   
-    return ap_pass_brigade(f->next, bb);
+    return APR_SUCCESS;
 }
 
 static void insert_filter(request_rec *r){
@@ -610,12 +573,13 @@ static void insert_filter(request_rec *r){
     if (r->method_number == M_PUT ){
         ap_add_input_filter_handle(filter_handle_put, NULL, r, r->connection);
     }
-    if (r->method_number == M_DELETE) {
-        ap_add_output_filter_handle(filter_handle_delete, NULL, r, r->connection);
-    }
-    if (r->method_number == M_GET) {
-        ap_add_output_filter_handle(filter_handle_get, NULL, r, r->connection);
-    }
+}
+
+static int want_digest_handler(request_rec *r)
+{
+    if (r->method_number == M_GET) return want_digest_get(r);
+    else if (r->method_number == M_DELETE) return want_digest_delete(r);
+    else return DECLINED;
 }
 
 static const char *wd_cmd_func(cmd_parms *cmd, void *config, const char *arg1)
@@ -636,14 +600,12 @@ static const char *wd_cmd_func(cmd_parms *cmd, void *config, const char *arg1)
 /* register_hooks: Adds a hook to the httpd process */
 static void register_hooks(apr_pool_t *pool) 
 {
-    // register and add in/output filters
+    // register input filter for PUT
     filter_handle_put = 
         ap_register_input_filter(filter_name_put, want_digest_put_filter, NULL, AP_FTYPE_RESOURCE);
-    filter_handle_delete = 
-        ap_register_output_filter(filter_name_delete, want_digest_delete_filter, NULL, AP_FTYPE_RESOURCE);
-    filter_handle_get = 
-        ap_register_output_filter(filter_name_get, want_digest_get_filter, NULL, AP_FTYPE_RESOURCE);
-    // hook in function to add the filters to the current request
+    // hook handler for GET and DELETE, those are not handled by filters but by module functions
+    ap_hook_handler(want_digest_handler, NULL, NULL, APR_HOOK_FIRST);
+    // hook in function to add the filter to a PUT request
     ap_hook_insert_filter(insert_filter, NULL, NULL, APR_HOOK_LAST);
 }
 
