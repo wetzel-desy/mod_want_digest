@@ -8,7 +8,7 @@ The module is compiled with
 ```
 sudo apxs -i -a -c mod_want_digest.c
 ```
-on the target machine. Currently, there is no config for the module, it just works on the HTTP GET and HEAD requests. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
+on the target machine. Currently, there is no config for the module, it works on the HTTP GET and HEAD requests. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
 
 Example:
 ``` 
@@ -28,6 +28,8 @@ Content-Type: text/plain
 TODO:
 - implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request.
 - implement a precalculation mechanism for all files on disk that are exposed to the internet(TM) in order to save time for large files.
+- add a config handler to activate/deactivate the module
+- implement as filter module instead of pure module?
 
 Contributors
 ================
