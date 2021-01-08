@@ -6,9 +6,9 @@ It has been tested with various HTTP header combinations and returns the correct
 
 The module is compiled with 
 ```
-sudo apxs -i -a -c mod_want_digest_filter.c
+sudo apxs -i -a -c mod_want_digest.c
 ```
-on the target machine. Currently, there is no config for the module, it works on the HTTP GET and HEAD requests. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
+on the target machine. Currently, there is one config option for the module that sets the digest caching location on a per-directory basis (the directive to use in a <Location>-directive is `DigestRootDir`. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
 
 Example:
 ``` 
@@ -25,11 +25,13 @@ Vary: Accept-Encoding
 Content-Type: text/plain
 ```
 
+Version 0.1 was shipped without caching and can be found under the tag `v0.1`. The main branch is always hosting the newest version and is hopefully stable.
+
 TODO:
-- implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request. -> DONE, to be found in mod_want_digest_filter.c
+- implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request. -> DONE
 - implement a precalculation mechanism for all files on disk that are exposed to the internet(TM) in order to save time for large files.
-- add a config handler to activate/deactivate the module. -> DONE, to be found in mod_want_digest_filter.c
-- implement as filter module instead of pure module? -> DONE, to be found in mod_want_digest_filter.c
+- add a config handler to activate/deactivate the module. -> DONE
+- implement as filter module instead of pure module? -> DONE
 
 Contributors
 ================
