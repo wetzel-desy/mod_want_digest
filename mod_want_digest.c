@@ -36,11 +36,7 @@ module AP_MODULE_DECLARE_DATA want_digest_filter_module;
 //
 //define filter names
 static const char filter_name_put[] = "WANT_DIGEST_PUT";
-static const char filter_name_delete[] = "WANT_DIGEST_DELETE";
-static const char filter_name_get[] = "WANT_DIGEST_GET";
 static ap_filter_rec_t *filter_handle_put;
-static ap_filter_rec_t *filter_handle_delete;
-static ap_filter_rec_t *filter_handle_get;
 
 // struct for mapping the wanted digest algorithm and corresponding quality value from
 // the 'Want-Digest' header token.
@@ -78,6 +74,8 @@ typedef struct want_digest_ctx {
     int seen_eos;
 } want_digest_ctx;
 
+// the calculate_* functions have side effects (adding digests to headers_out), so we need to separate functionalities.
+//
 // calculates the md5 digest of a file and adds it to headers_out
 void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_MD5_DIGESTSIZE];
