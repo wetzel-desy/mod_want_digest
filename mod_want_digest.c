@@ -65,6 +65,7 @@ typedef struct wd_dir_config {
 
 // struct for saving the filter context.
 typedef struct want_digest_ctx {
+    int lock;
     st_md5 *md5_ctx;
     st_sha *sha_ctx;
     size_t adler;
@@ -415,6 +416,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     apr_status_t rv;
     const char *data;
     char *filepath, *filename, *path, *new_path;
+    apr_file_t *fhandle;
     apr_size_t len;
     apr_finfo_t finfo;
     // the context for this filter
@@ -449,6 +451,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         // status variables in ctx
         ctx->seen_eos = 0;
         ctx->remaining = 0;
+        ctx->lock = 0;
         // check for content-length, without it, we cannot proceed.
         if (apr_table_get(f->r->headers_in, "Content-Length"))
         {
@@ -465,12 +468,19 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         // do not interfere!
         ctx->lock_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".lock", NULL);
         rv = apr_stat(&finfo, ctx->lock_filename, APR_FINFO_NORM, f->r->pool);
-        if (rv == APR_SUCCESS) 
+        if (rv == APR_SUCCESS && ctx->lock == 0) 
         {
             ap_remove_input_filter(f);
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                          "Digest lock file for %s in place, stepping aside.", ctx->filename);
             return APR_SUCCESS;
+        }
+        else
+        {
+        // create lock file
+        if (apr_file_open(&fhandle, ctx->lock_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
+        ctx->lock = 1;
         }
     }
 
@@ -497,6 +507,11 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                          "ctx->remaining < 0");
+            // delete lock file
+            if (ctx-> lock == 1)
+            {
+                if (apr_file_remove(ctx->lock_filename, f->r->pool) != APR_SUCCESS) return 500;
+            }
             ap_remove_input_filter(f);
             break;
         }
@@ -546,7 +561,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
 
         // prepare paths
-        apr_file_t *fhandle;
         char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".md5", NULL);
         apr_size_t md5_len = sizeof(ctx->md5_ctx->hex_digest);
         char *sha_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".sha", NULL);
@@ -556,9 +570,6 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
         apr_size_t adler32_len = sizeof(adler32);
 
-        // create lock file
-        if (apr_file_open(&fhandle, ctx->lock_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
-        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
 
         // create and write files
         if (apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
@@ -574,7 +585,10 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
 
         // delete lock file
-        if (apr_file_remove(ctx->lock_filename, f->r->pool) != APR_SUCCESS) return 500;
+        if (ctx-> lock == 1)
+        {
+            if (apr_file_remove(ctx->lock_filename, f->r->pool) != APR_SUCCESS) return 500;
+        }
         
         // step aside
         ap_remove_input_filter(f);
