@@ -72,6 +72,10 @@ typedef struct want_digest_ctx {
     char *digest_root_dir;
     apr_off_t remaining;
     int seen_eos;
+    const char *filename_base;
+    const char *filename_dir;
+    const char *digest_save_path;
+    const char *lock_filename;
 } want_digest_ctx;
 
 // the calculate_* functions have side effects (adding digests to headers_out), so we need to separate functionalities.
@@ -412,6 +416,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
     const char *data;
     char *filepath, *filename, *path, *new_path;
     apr_size_t len;
+    apr_finfo_t finfo;
     // the context for this filter
     want_digest_ctx *ctx = f->ctx;
     // per-dir config
@@ -435,11 +440,16 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_md5_init(&(ctx->md5_ctx->md5));
         apr_sha1_init(&(ctx->sha_ctx->sha1));
         ctx->adler = adler32_z(0L, Z_NULL, 0);
-        // further ctx
+        // directory paths for ctx
         ctx->filename = f->r->filename;
         ctx->digest_root_dir = cfg->digest_root_dir;
+        ctx->filename_base = basename((char*)ctx->filename);
+        ctx->filename_dir = dirname((char*)ctx->filename);
+        ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, path, NULL);
+        // status variables in ctx
         ctx->seen_eos = 0;
         ctx->remaining = 0;
+        // check for content-length, without it, we cannot proceed.
         if (apr_table_get(f->r->headers_in, "Content-Length"))
         {
             ctx->remaining = atoi(apr_table_get(f->r->headers_in, "Content-Length"));
@@ -449,6 +459,17 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
             ap_remove_input_filter(f);
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                          "No content-length given, stepping aside.");
+            return APR_SUCCESS;
+        }
+        // finally: check for the lockfile, if any other application is dealing with digests at the moment,
+        // do not interfere!
+        ctx->lock_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".lock", NULL);
+        rv = apr_stat(&finfo, ctx->lock_filename, APR_FINFO_NORM, f->r->pool);
+        if (rv == APR_SUCCESS) 
+        {
+            ap_remove_input_filter(f);
+            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                         "Digest lock file for %s in place, stepping aside.", ctx->filename);
             return APR_SUCCESS;
         }
     }
@@ -520,26 +541,24 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         }
         ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
         
-        // now to save the hashes somewhere!
-        // extract basename and dirname
-        filename = basename((char*)ctx->filename);
-        path = dirname((char*)ctx->filename);
-
-        new_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, path, NULL);
-
+        // now to save the hashes! 
         // create directory recursively to store the file's hashes
-        if (apr_dir_make_recursive(new_path, APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
 
         // prepare paths
         apr_file_t *fhandle;
-        char *md5_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".md5", NULL);
+        char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".md5", NULL);
         apr_size_t md5_len = sizeof(ctx->md5_ctx->hex_digest);
-        char *sha_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".sha", NULL);
+        char *sha_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".sha", NULL);
         apr_size_t sha_len = sizeof(ctx->sha_ctx->hex_digest);
-        char *adler32_filename = apr_pstrcat(f->r->pool, new_path, "/", filename, ".adler32", NULL);
+        char *adler32_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".adler32", NULL);
         char adler32[sizeof(ctx->adler)+1];
         snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
         apr_size_t adler32_len = sizeof(adler32);
+
+        // create lock file
+        if (apr_file_open(&fhandle, ctx->lock_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
 
         // create and write files
         if (apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
@@ -553,6 +572,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
         if (apr_file_write(fhandle, &adler32, &adler32_len) != APR_SUCCESS) return 500;
         if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
+
+        // delete lock file
+        if (apr_file_remove(ctx->lock_filename, f->r->pool) != APR_SUCCESS) return 500;
         
         // step aside
         ap_remove_input_filter(f);
