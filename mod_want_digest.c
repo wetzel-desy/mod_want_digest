@@ -571,6 +571,8 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_size_t adler32_len = sizeof(adler32);
 
 
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "Trying to write digests for %s.", ctx->filename);
         // create and write files
         if (apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
         if (apr_file_write(fhandle, &ctx->md5_ctx->hex_digest, &md5_len) != APR_SUCCESS) return 500;
