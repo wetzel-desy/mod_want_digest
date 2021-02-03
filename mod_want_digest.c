@@ -447,7 +447,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         ctx->digest_root_dir = cfg->digest_root_dir;
         ctx->filename_base = basename((char*)ctx->filename);
         ctx->filename_dir = dirname((char*)ctx->filename);
-        ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, path, NULL);
+        ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, ctx->filename_dir, NULL);
         // status variables in ctx
         ctx->seen_eos = 0;
         ctx->remaining = 0;
@@ -558,7 +558,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         
         // now to save the hashes! 
         // create directory recursively to store the file's hashes
-        if (apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool) != APR_SUCCESS) return 500;
+        rv = apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool);
 
         // prepare paths
         char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".md5", NULL);
