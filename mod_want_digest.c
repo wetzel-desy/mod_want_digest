@@ -453,6 +453,8 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         ctx->filename_base = basename((char*)ctx->filename);
         ctx->filename_dir = dirname((char*)ctx->filename);
         ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, ctx->filename_dir, NULL);
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "digest_save_path: %s.", ctx->digest_save_path);
         // status variables in ctx
         ctx->seen_eos = 0;
         ctx->remaining = 0;
@@ -472,6 +474,8 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         // finally: check for the lockfile, if any other application is dealing with digests at the moment,
         // do not interfere!
         ctx->lock_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".lock", NULL);
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "Filename for .lock-file: %s.", ctx->lock_filename);
         rv = apr_stat(&finfo, ctx->lock_filename, APR_FINFO_NORM, f->r->pool);
         if (rv == APR_SUCCESS && ctx->lock == 0) 
         {
