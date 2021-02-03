@@ -455,6 +455,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, ctx->filename_dir, NULL);
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
                      "digest_save_path: %s.", ctx->digest_save_path);
+        rv = apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool);
         // status variables in ctx
         ctx->seen_eos = 0;
         ctx->remaining = 0;
