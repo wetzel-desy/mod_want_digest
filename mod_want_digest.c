@@ -584,6 +584,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         if (apr_file_write(fhandle, &adler32, &adler32_len) != APR_SUCCESS) return 500;
         if (apr_file_close(fhandle) != APR_SUCCESS) return 500;
 
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
+                     "Digests written for %s.", ctx->filename);
+
         // delete lock file
         if (ctx-> lock == 1)
         {
