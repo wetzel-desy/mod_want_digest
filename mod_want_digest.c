@@ -79,11 +79,6 @@ typedef struct want_digest_ctx {
     const char *lock_filename;
 } want_digest_ctx;
 
-void dbg_msg(server_rec *srv, int msg){
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, srv, APLOGNO()
-                     "dbg msg no. %i", msg);
-}
-
 // the calculate_* functions have side effects (adding digests to headers_out), so we need to separate functionalities.
 //
 // calculates the md5 digest of a file and adds it to headers_out
@@ -450,11 +445,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         // directory paths for ctx
         ctx->filename = f->r->filename;
         ctx->digest_root_dir = cfg->digest_root_dir;
-        ctx->filename_base = basename((char*)ctx->filename);
-        ctx->filename_dir = dirname((char*)ctx->filename);
+        ctx->filename_dir = dirname(apr_pstrdup(f->r->pool, ctx->filename));
+        ctx->filename_base = basename(apr_pstrdup(f->r->pool, ctx->filename));
         ctx->digest_save_path = apr_pstrcat(f->r->pool, ctx->digest_root_dir, ctx->filename_dir, NULL);
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "digest_save_path: %s.", ctx->digest_save_path);
         rv = apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool);
         // status variables in ctx
         ctx->seen_eos = 0;
@@ -476,7 +469,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         // do not interfere!
         ctx->lock_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".lock", NULL);
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "Filename for .lock-file: %s.", ctx->lock_filename);
+                     "ctx->lock_filename: %s.", ctx->lock_filename);
         rv = apr_stat(&finfo, ctx->lock_filename, APR_FINFO_NORM, f->r->pool);
         if (rv == APR_SUCCESS && ctx->lock == 0) 
         {
@@ -489,9 +482,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         {
         // create lock file
         rv = apr_file_open(&fhandle, ctx->lock_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 0);
         rv = apr_file_close(fhandle);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 1);
         ctx->lock = 1;
         }
     }
@@ -573,48 +564,32 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         rv = apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool);
 
         // prepare paths
-        char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".md5", NULL);
+        char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".md5", NULL);
         apr_size_t md5_len = sizeof(ctx->md5_ctx->hex_digest);
-        char *sha_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".sha", NULL);
+        char *sha_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".sha", NULL);
         apr_size_t sha_len = sizeof(ctx->sha_ctx->hex_digest);
-        char *adler32_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", filename, ".adler32", NULL);
+        char *adler32_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".adler32", NULL);
         char adler32[sizeof(ctx->adler)+1];
         snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
         apr_size_t adler32_len = sizeof(adler32);
 
-
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "Trying to write digests for %s.", ctx->filename);
         // create and write files
         rv = apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 2);
         rv = apr_file_write(fhandle, &ctx->md5_ctx->hex_digest, &md5_len);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 3);
         rv = apr_file_close(fhandle);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 4);
         
         rv = apr_file_open(&fhandle, sha_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 5);
         rv = apr_file_write(fhandle, &ctx->sha_ctx->hex_digest, &sha_len);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 6);
         rv = apr_file_close(fhandle);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 7);
 
         rv = apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 8);
         rv = apr_file_write(fhandle, &adler32, &adler32_len);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 9);
         rv = apr_file_close(fhandle);
-        if (rv != APR_SUCCESS) dbg_msg(f->r->server, 10);
-
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "Digests written for %s.", ctx->filename);
 
         // delete lock file
         if (ctx-> lock == 1)
         {
             rv = apr_file_remove(ctx->lock_filename, f->r->pool);
-            if (rv != APR_SUCCESS) dbg_msg(f->r->server, 11);
         }
         
         // step aside
