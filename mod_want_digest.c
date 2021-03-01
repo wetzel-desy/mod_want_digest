@@ -257,7 +257,7 @@ static const char *get_entry(apr_pool_t *p, digest_algorithm *result,
 static int want_digest_get(request_rec *r)
 {
     // variables
-    int rc, file_exists, hash_exists;
+    int rc, file_exists, hash_exists, len;
     apr_finfo_t finfo;
     apr_file_t* file;
     char *filename, *hash_filename;
@@ -311,10 +311,14 @@ static int want_digest_get(request_rec *r)
                 rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rc == APR_SUCCESS)
                 {
-                    char final_digest[finfo.size+4];
                     char hash_buf[finfo.size];
+                    char b64_digest[apr_base64_encode_len(sizeof(hash_buf))];
+                    char final_digest[sizeof(b64_digest)+4];
+
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
-                    sprintf(&final_digest[0], "MD5=%s", hash_buf);
+                    len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
+                    sprintf(&final_digest[0], "MD5=%s", b64_digest);
+
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
@@ -341,10 +345,13 @@ static int want_digest_get(request_rec *r)
                 rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rc == APR_SUCCESS)
                 {
-                    char final_digest[finfo.size+4];
                     char hash_buf[finfo.size];
+                    char b64_digest[apr_base64_encode_len(sizeof(hash_buf))];
+                    char final_digest[sizeof(b64_digest)+4];
+
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
-                    sprintf(&final_digest[0], "SHA=%s", hash_buf);
+                    len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
+                    sprintf(&final_digest[0], "SHA=%s", b64_digest);
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
