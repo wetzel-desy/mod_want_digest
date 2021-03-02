@@ -84,8 +84,9 @@ typedef struct want_digest_ctx {
 // calculates the md5 digest of a file and adds it to headers_out
 void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_MD5_DIGESTSIZE];
-    char b64_digest[apr_base64_encode_len(sizeof(digest))];
-    char final_digest[sizeof(b64_digest)+4];
+    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
+    char b64_digest[apr_base64_encode_len(sizeof(hex_digest))];
+    char final_digest[sizeof(b64_digest)+5];
     int len;
     apr_md5_ctx_t md5;
     apr_md5_init(&md5);
@@ -94,18 +95,25 @@ void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t re
         apr_md5_update(&md5, buffer, readBytes);
     }
     apr_md5_final(digest, &md5);
+    // rewrite binary form of digests into readable string output
+    for (int i = 0; i<sizeof(digest); i++)
+    {
+       snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
+    }
+    //hex_digest[sizeof(hex_digest)-1] = '\0';
     
-    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
+    len = apr_base64_encode(b64_digest, hex_digest, sizeof(hex_digest));
 
-    sprintf(&final_digest[0], "MD5=%s", b64_digest);
+    snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
     apr_table_add(r->headers_out, "Digest", final_digest); 
 }
 
 // calculates the sha digest of a file and adds it to headers_out
 void calculate_sha(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_SHA1_DIGESTSIZE];
-    char b64_digest[apr_base64_encode_len(sizeof(digest))];
-    char final_digest[sizeof(b64_digest)+4];
+    char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
+    char b64_digest[apr_base64_encode_len(sizeof(hex_digest))];
+    char final_digest[sizeof(b64_digest)+5];
     int len;
     apr_sha1_ctx_t sha1;
     apr_sha1_init(&sha1);
@@ -115,8 +123,15 @@ void calculate_sha(request_rec *r, apr_file_t *file, char *buffer, apr_size_t re
     }
     apr_sha1_final(digest, &sha1);
 
-    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
-    sprintf(&final_digest[0], "SHA=%s", b64_digest);
+    // rewrite binary form of digests into readable string output
+    for (int i = 0; i<sizeof(digest); i++)
+    {
+       snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
+    }
+    //hex_digest[sizeof(hex_digest)-1] = '\0';
+
+    len = apr_base64_encode(b64_digest, hex_digest, sizeof(hex_digest));
+    snprintf(&final_digest[0], sizeof(final_digest), "SHA=%s", b64_digest);
     apr_table_add(r->headers_out, "Digest", final_digest); 
 }
 
@@ -128,7 +143,7 @@ void calculate_adler32(request_rec *r, apr_file_t *file, char *buffer, apr_size_
     }
 
     char digest[17];
-    sprintf(&digest[0], "ADLER32=%lx", adler);
+    sprintf(&digest[0], "ADLER32=%08lx", adler);
     apr_table_add(r->headers_out, "Digest", digest); 
 }
 
@@ -316,6 +331,8 @@ static int want_digest_get(request_rec *r)
                     char final_digest[sizeof(b64_digest)+4];
 
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
+                                 "Read MD5 digest %s from file.", hash_buf);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
                     sprintf(&final_digest[0], "MD5=%s", b64_digest);
 
@@ -350,6 +367,8 @@ static int want_digest_get(request_rec *r)
                     char final_digest[sizeof(b64_digest)+4];
 
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
+                                 "Read SHA digest %s from file.", hash_buf);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
                     sprintf(&final_digest[0], "SHA=%s", b64_digest);
 
@@ -381,6 +400,8 @@ static int want_digest_get(request_rec *r)
                     char final_digest[finfo.size+8];
                     char hash_buf[finfo.size];
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
+                                 "Read ADLER32 digest %s from file.", hash_buf);
                     sprintf(&final_digest[0], "ADLER32=%s", hash_buf);
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
@@ -581,7 +602,7 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_size_t sha_len = sizeof(ctx->sha_ctx->hex_digest);
         char *adler32_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".adler32", NULL);
         char adler32[sizeof(ctx->adler)+1];
-        snprintf(adler32, sizeof(ctx->adler)+1, "%lx", ctx->adler);
+        snprintf(adler32, sizeof(adler32), "%08lx", ctx->adler);
         apr_size_t adler32_len = sizeof(adler32);
 
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
