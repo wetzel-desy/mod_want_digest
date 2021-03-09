@@ -397,7 +397,7 @@ static int want_digest_get(request_rec *r)
                 rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rc == APR_SUCCESS)
                 {
-                    char final_digest[finfo.size+8];
+                    char final_digest[finfo.size+9];
                     char hash_buf[finfo.size];
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
