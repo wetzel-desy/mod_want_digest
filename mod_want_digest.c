@@ -334,7 +334,7 @@ static int want_digest_get(request_rec *r)
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
                                  "Read MD5 digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
-                    snprintf(&final_digest[0], len, "MD5=%s", b64_digest);
+                    snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
 
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
@@ -370,7 +370,7 @@ static int want_digest_get(request_rec *r)
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
                                  "Read SHA digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
-                    snprintf(&final_digest[0], len, "SHA=%s", b64_digest);
+                    snprintf(&final_digest[0], sizeof(final_digest), "SHA=%s", b64_digest);
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
