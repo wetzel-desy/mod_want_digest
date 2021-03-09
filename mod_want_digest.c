@@ -332,7 +332,7 @@ static int want_digest_get(request_rec *r)
 
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                                 "Read MD5 digest %s from file.", hash_buf);
+                                 "Read MD5 digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
                     sprintf(&final_digest[0], "MD5=%s", b64_digest);
 
@@ -368,7 +368,7 @@ static int want_digest_get(request_rec *r)
 
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                                 "Read SHA digest %s from file.", hash_buf);
+                                 "Read SHA digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
                     sprintf(&final_digest[0], "SHA=%s", b64_digest);
 
@@ -401,7 +401,7 @@ static int want_digest_get(request_rec *r)
                     char hash_buf[finfo.size];
                     rc = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
-                                 "Read ADLER32 digest %s from file.", hash_buf);
+                                 "Read ADLER32 digest %s from file %li.", hash_buf, finfo.size);
                     sprintf(&final_digest[0], "ADLER32=%s", hash_buf);
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
