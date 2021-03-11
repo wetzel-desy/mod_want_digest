@@ -47,13 +47,13 @@ typedef struct digest_algorithm {
 
 typedef struct st_md5 {
     unsigned char digest[APR_MD5_DIGESTSIZE];
-    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
+    //char hex_digest[2*APR_MD5_DIGESTSIZE+1];
     apr_md5_ctx_t md5;
 } st_md5;
 
 typedef struct st_sha {
     unsigned char digest[APR_SHA1_DIGESTSIZE];
-    char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
+    //char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
     apr_sha1_ctx_t sha1;
 } st_sha;
 
@@ -84,8 +84,8 @@ typedef struct want_digest_ctx {
 // calculates the md5 digest of a file and adds it to headers_out
 void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_MD5_DIGESTSIZE];
-    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
-    char b64_digest[apr_base64_encode_len(sizeof(hex_digest))];
+//    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
+    char b64_digest[apr_base64_encode_len(sizeof(digest))];
     char final_digest[sizeof(b64_digest)+5];
     int len;
     apr_md5_ctx_t md5;
@@ -96,13 +96,13 @@ void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t re
     }
     apr_md5_final(digest, &md5);
     // rewrite binary form of digests into readable string output
-    for (int i = 0; i<sizeof(digest); i++)
-    {
-       snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
-    }
+    //for (int i = 0; i<sizeof(digest); i++)
+    //{
+    //   snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
+    //}
     //hex_digest[sizeof(hex_digest)-1] = '\0';
     
-    len = apr_base64_encode(b64_digest, hex_digest, sizeof(hex_digest));
+    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
 
     snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
     apr_table_add(r->headers_out, "Digest", final_digest); 
@@ -111,8 +111,8 @@ void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t re
 // calculates the sha digest of a file and adds it to headers_out
 void calculate_sha(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
     unsigned char digest[APR_SHA1_DIGESTSIZE];
-    char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
-    char b64_digest[apr_base64_encode_len(sizeof(hex_digest))];
+    //char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
+    char b64_digest[apr_base64_encode_len(sizeof(digest))];
     char final_digest[sizeof(b64_digest)+5];
     int len;
     apr_sha1_ctx_t sha1;
@@ -124,13 +124,13 @@ void calculate_sha(request_rec *r, apr_file_t *file, char *buffer, apr_size_t re
     apr_sha1_final(digest, &sha1);
 
     // rewrite binary form of digests into readable string output
-    for (int i = 0; i<sizeof(digest); i++)
-    {
-       snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
-    }
+    //for (int i = 0; i<sizeof(digest); i++)
+    //{
+    //   snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
+    //}
     //hex_digest[sizeof(hex_digest)-1] = '\0';
 
-    len = apr_base64_encode(b64_digest, hex_digest, sizeof(hex_digest));
+    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
     snprintf(&final_digest[0], sizeof(final_digest), "SHA=%s", b64_digest);
     apr_table_add(r->headers_out, "Digest", final_digest); 
 }
@@ -143,7 +143,7 @@ void calculate_adler32(request_rec *r, apr_file_t *file, char *buffer, apr_size_
     }
 
     char digest[17];
-    sprintf(&digest[0], "ADLER32=%08lx", adler);
+    snprintf(&digest[0], sizeof(digest), "ADLER32=%08lx", adler);
     apr_table_add(r->headers_out, "Digest", digest); 
 }
 
@@ -579,17 +579,17 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         //ADLER32 is already finished at this point.
         
         // rewrite binary form of digests into readable string output
-        for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
-        {
-           snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
-        }
-        ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
+        //for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
+        //{
+        //   snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
+        //}
+        //ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
 
-        for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
-        {
-           snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
-        }
-        ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
+        //for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
+        //{
+        //   snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
+        //}
+        //ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
         
         // now to save the hashes! 
         // create directory recursively to store the file's hashes
@@ -597,9 +597,9 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
 
         // prepare paths
         char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".md5", NULL);
-        apr_size_t md5_len = sizeof(ctx->md5_ctx->hex_digest);
+        apr_size_t md5_len = sizeof(ctx->md5_ctx->digest);
         char *sha_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".sha", NULL);
-        apr_size_t sha_len = sizeof(ctx->sha_ctx->hex_digest);
+        apr_size_t sha_len = sizeof(ctx->sha_ctx->digest);
         char *adler32_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".adler32", NULL);
         char adler32[sizeof(ctx->adler)+1];
         snprintf(adler32, sizeof(adler32), "%08lx", ctx->adler);
@@ -609,11 +609,11 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
                      "Writing digests for %s.", ctx->filename);
         // create and write files
         rv = apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        rv = apr_file_write(fhandle, &ctx->md5_ctx->hex_digest, &md5_len);
+        rv = apr_file_write(fhandle, &ctx->md5_ctx->digest, &md5_len);
         rv = apr_file_close(fhandle);
         
         rv = apr_file_open(&fhandle, sha_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
-        rv = apr_file_write(fhandle, &ctx->sha_ctx->hex_digest, &sha_len);
+        rv = apr_file_write(fhandle, &ctx->sha_ctx->digest, &sha_len);
         rv = apr_file_close(fhandle);
 
         rv = apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
