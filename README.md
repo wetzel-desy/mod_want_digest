@@ -1,16 +1,26 @@
 Description
 =================
 
-This module is an **alpha** version of an Apache2 httpd module that implements data integrity check in accordance with RFC 3230 (https://tools.ietf.org/html/rfc3230).
+This module is an **alpha** version of an Apache2 httpd module that implements a data integrity check in accordance with RFC 3230 (https://tools.ietf.org/html/rfc3230).
 It has been tested with various HTTP header combinations and returns the correct digests according to specifications in RFC 3230.
+Currently, ADLER32, MD5 and SHA-1 checksums are supported.
 
-The module is compiled with 
+The module is compiled, installed and activated (-cia) via
 ```
-sudo apxs -i -a -c mod_want_digest.c
+sudo apxs -cia mod_want_digest.c
 ```
-on the target machine. Currently, there is one config option for the module that sets the digest caching location on a per-directory basis (the directive to use in a <Location>-directive is `DigestRootDir`. Currently, ADLER32, MD5 and SHA-1 checksums are supported.
+on the target machine.
+Currently, there is one config option for the module that sets the digest caching location on a per-directory basis (the directive to use in a <Directory>-directive is `DigestRootDir`). The digests will be cached in the `DigestRootDir` from the directory in which the directive is placed.
+Example configuration:
+```
+<Directory "/mnt/data">
+    # other configuration options
+    DigestRootDir /var/run/apache2/digests
+    # other configuration options
+</Directory>
+```
 
-Example:
+Example HTTP request via cURL:
 ``` 
 curl --head https://foo.bar.com/foobar.txt -H "Want-Digest: MD5"
 
@@ -27,11 +37,8 @@ Content-Type: text/plain
 
 Version 0.1 was shipped without caching and can be found under the tag `v0.1`. The main branch is always hosting the newest version and is hopefully stable.
 
-TODO:
-- implement a caching mechanism that calculates the checksum of a file on the fly for a PUT request. -> DONE
-- implement a precalculation mechanism for all files on disk that are exposed to the internet(TM) in order to save time for large files.
-- add a config handler to activate/deactivate the module. -> DONE
-- implement as filter module instead of pure module? -> DONE
+Nota bene:
+The module does not calculate or cache digests for files that are copied directly into the directory configured to be served via webDAV. There is, however, the option to use a combination of `inotifywait` and a fitting script on system level to achieve that. If you are interested in such an implementation, please let us know.
 
 Contributors
 ================
