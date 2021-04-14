@@ -79,74 +79,6 @@ typedef struct want_digest_ctx {
     const char *lock_filename;
 } want_digest_ctx;
 
-// the calculate_* functions have side effects (adding digests to headers_out), so we need to separate functionalities.
-//
-// calculates the md5 digest of a file and adds it to headers_out
-void calculate_md5(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
-    unsigned char digest[APR_MD5_DIGESTSIZE];
-//    char hex_digest[2*APR_MD5_DIGESTSIZE+1];
-    char b64_digest[apr_base64_encode_len(sizeof(digest))];
-    char final_digest[sizeof(b64_digest)+5];
-    int len;
-    apr_md5_ctx_t md5;
-    apr_md5_init(&md5);
-
-    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
-        apr_md5_update(&md5, buffer, readBytes);
-    }
-    apr_md5_final(digest, &md5);
-    // rewrite binary form of digests into readable string output
-    //for (int i = 0; i<sizeof(digest); i++)
-    //{
-    //   snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
-    //}
-    //hex_digest[sizeof(hex_digest)-1] = '\0';
-    
-    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
-
-    snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
-    apr_table_add(r->headers_out, "Digest", final_digest); 
-}
-
-// calculates the sha digest of a file and adds it to headers_out
-void calculate_sha(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
-    unsigned char digest[APR_SHA1_DIGESTSIZE];
-    //char hex_digest[2*APR_SHA1_DIGESTSIZE+1];
-    char b64_digest[apr_base64_encode_len(sizeof(digest))];
-    char final_digest[sizeof(b64_digest)+5];
-    int len;
-    apr_sha1_ctx_t sha1;
-    apr_sha1_init(&sha1);
-
-    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
-        apr_sha1_update(&sha1, buffer, readBytes);
-    }
-    apr_sha1_final(digest, &sha1);
-
-    // rewrite binary form of digests into readable string output
-    //for (int i = 0; i<sizeof(digest); i++)
-    //{
-    //   snprintf(&(hex_digest[i*2]), sizeof(hex_digest)-(i*2), "%02x", digest[i]); 
-    //}
-    //hex_digest[sizeof(hex_digest)-1] = '\0';
-
-    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
-    snprintf(&final_digest[0], sizeof(final_digest), "SHA=%s", b64_digest);
-    apr_table_add(r->headers_out, "Digest", final_digest); 
-}
-
-// calculates the adler32 digest of a file and adds it to headers_out
-void calculate_adler32(request_rec *r, apr_file_t *file, char *buffer, apr_size_t readBytes){
-    size_t adler = adler32_z(0L, Z_NULL, 0);
-    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
-        adler = adler32_z(adler, buffer, readBytes);
-    }
-
-    char digest[17];
-    snprintf(&digest[0], sizeof(digest), "ADLER32=%08lx", adler);
-    apr_table_add(r->headers_out, "Digest", digest); 
-}
-
 // parses q-values from a string
 // taken from httpd/modules/mappers/mod_negotiation.c
 static float atoq(const char *string)
@@ -328,7 +260,7 @@ static int want_digest_get(request_rec *r)
                 {
                     char hash_buf[finfo.size];
                     char b64_digest[apr_base64_encode_len(sizeof(hash_buf))];
-                    char final_digest[sizeof(b64_digest)+4];
+                    char final_digest[sizeof(b64_digest)+5];
 
                     rv = apr_file_read(file, &hash_buf, &finfo.size);
                     if (rv != APR_SUCCESS) return rv;
@@ -336,7 +268,6 @@ static int want_digest_get(request_rec *r)
                                  "Read MD5 digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
                     snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
-
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
@@ -348,7 +279,22 @@ static int want_digest_get(request_rec *r)
                 rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rv == APR_SUCCESS)
                 {
-                    calculate_md5(r, file, buffer, readBytes);
+                    unsigned char digest[APR_MD5_DIGESTSIZE];
+                    char b64_digest[apr_base64_encode_len(sizeof(digest))];
+                    char final_digest[sizeof(b64_digest)+5]; // length of b64_digest + "MD5=" + "\0"
+                    int len;
+                    apr_md5_ctx_t md5;
+                    apr_md5_init(&md5);
+
+                    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
+                        apr_md5_update(&md5, buffer, readBytes);
+                    }
+                    apr_md5_final(digest, &md5);
+                    
+                    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
+
+                    snprintf(&final_digest[0], sizeof(final_digest), "MD5=%s", b64_digest);
+                    apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
                 else return rv;
                 apr_file_close(file);
@@ -383,7 +329,22 @@ static int want_digest_get(request_rec *r)
                 rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rv == APR_SUCCESS)
                 {
-                    calculate_sha(r, file, buffer, readBytes);
+                    unsigned char digest[APR_SHA1_DIGESTSIZE];
+                    char b64_digest[apr_base64_encode_len(sizeof(digest))];
+                    char final_digest[sizeof(b64_digest)+5];
+                    int len;
+                    apr_sha1_ctx_t sha1;
+                    apr_sha1_init(&sha1);
+
+                    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
+                        apr_sha1_update(&sha1, buffer, readBytes);
+                    }
+                    apr_sha1_final(digest, &sha1);
+
+                    len = apr_base64_encode(b64_digest, digest, sizeof(digest));
+                    snprintf(&final_digest[0], sizeof(final_digest), "SHA=%s", b64_digest);
+
+                    apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
                 else return rv;
                 apr_file_close(file);
@@ -415,7 +376,14 @@ static int want_digest_get(request_rec *r)
                 rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
                 if (rv == APR_SUCCESS)
                 {
-                    calculate_adler32(r, file, buffer, readBytes);
+                    size_t adler = adler32_z(0L, Z_NULL, 0);
+                    while ( apr_file_read(file, buffer, &readBytes) == APR_SUCCESS ) {
+                        adler = adler32_z(adler, buffer, readBytes);
+                    }
+
+                    char digest[17];
+                    snprintf(&digest[0], sizeof(digest), "ADLER32=%08lx", adler);
+                    apr_table_add(r->headers_out, "Digest", digest); 
                 }
                 else return rv;
                 apr_file_close(file);
@@ -580,22 +548,10 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_sha1_final(ctx->sha_ctx->digest, &(ctx->sha_ctx->sha1));
         //ADLER32 is already finished at this point.
         
-        // rewrite binary form of digests into readable string output
-        //for (int i = 0; i<sizeof(ctx->md5_ctx->digest); i++)
-        //{
-        //   snprintf(&(ctx->md5_ctx->hex_digest[i*2]), sizeof(ctx->md5_ctx->hex_digest)-(i*2), "%02x", ctx->md5_ctx->digest[i]); 
-        //}
-        //ctx->md5_ctx->hex_digest[sizeof(ctx->md5_ctx->hex_digest)-1] = '\0';
-
-        //for (int i = 0; i<sizeof(ctx->sha_ctx->digest); i++)
-        //{
-        //   snprintf(&ctx->sha_ctx->hex_digest[i*2], sizeof(ctx->sha_ctx->hex_digest)-(i*2), "%02x", ctx->sha_ctx->digest[i]); 
-        //}
-        //ctx->sha_ctx->hex_digest[sizeof(ctx->sha_ctx->hex_digest)-1] = '\0';
-        
         // now to save the hashes! 
         // create directory recursively to store the file's hashes
         rv = apr_dir_make_recursive(ctx->digest_save_path, APR_FPROT_OS_DEFAULT, f->r->pool);
+        if (rv != APR_SUCCESS) return rv;
 
         // prepare paths
         char *md5_filename = apr_pstrcat(f->r->pool, ctx->digest_save_path, "/", ctx->filename_base, ".md5", NULL);
@@ -608,24 +564,35 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
         apr_size_t adler32_len = sizeof(adler32);
 
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->r->server, APLOGNO()
-                     "Writing digests for %s.", ctx->filename);
+                     "Saving/Caching digests for %s.", ctx->filename);
+
         // create and write files
         rv = apr_file_open(&fhandle, md5_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_write(fhandle, &ctx->md5_ctx->digest, &md5_len);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_close(fhandle);
+        if (rv != APR_SUCCESS) return rv;
         
         rv = apr_file_open(&fhandle, sha_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_write(fhandle, &ctx->sha_ctx->digest, &sha_len);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_close(fhandle);
+        if (rv != APR_SUCCESS) return rv;
 
         rv = apr_file_open(&fhandle, adler32_filename, (APR_FOPEN_WRITE|APR_FOPEN_CREATE), APR_FPROT_OS_DEFAULT, f->r->pool);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_write(fhandle, &adler32, &adler32_len);
+        if (rv != APR_SUCCESS) return rv;
         rv = apr_file_close(fhandle);
+        if (rv != APR_SUCCESS) return rv;
 
         // delete lock file
         if (ctx-> lock == 1)
         {
             rv = apr_file_remove(ctx->lock_filename, f->r->pool);
+            if (rv != APR_SUCCESS) return rv;
         }
         
         // step aside
@@ -660,16 +627,19 @@ static apr_status_t want_digest_delete(request_rec *r)
     {
         rv = apr_file_remove(md5_filename, r->pool);
     }
+    else return rv;
     rv = apr_stat(&finfo, sha_filename, APR_FINFO_NORM, r->pool);
     if (rv == APR_SUCCESS)
     {
         rv = apr_file_remove(sha_filename, r->pool);
     }
+    else return rv;
     rv = apr_stat(&finfo, adler_filename, APR_FINFO_NORM, r->pool);
     if (rv == APR_SUCCESS)
     {
         rv = apr_file_remove(adler_filename, r->pool);
     }
+    else return rv;
 
     path = dirname((char*)filename);
     delete_path = apr_pstrcat(r->pool, digest_root_dir, path, NULL);
@@ -678,6 +648,8 @@ static apr_status_t want_digest_delete(request_rec *r)
     // tree up to digest_root_dir and deletes all empty directories on the way.
     // for now it just deletes the bottom-most directory.
     rv = apr_dir_open(&dir, delete_path, r->pool);
+    if (rv != APR_SUCCESS) return rv;
+
     int count = 0;
     empty=1;
     while ((rv = apr_dir_read(&finfo,APR_FINFO_NAME, dir)) == APR_SUCCESS)
@@ -691,6 +663,7 @@ static apr_status_t want_digest_delete(request_rec *r)
         }
     }
     rv = apr_dir_close(dir);
+    if (rv != APR_SUCCESS) return rv;
 
     if (empty=1)
     {
@@ -721,13 +694,13 @@ static const char *wd_cmd_func(cmd_parms *cmd, void *config, const char *arg1)
     if (arg1 != NULL)
     {
         cfg->digest_root_dir = (char *)arg1;
+        return NULL;
     }
     else
     {
         return apr_psprintf(cmd->temp_pool,
                            "No root directory for digest caching configured!");
     }
-    return NULL;
 }
 
 /* register_hooks: Adds a hook to the httpd process */
