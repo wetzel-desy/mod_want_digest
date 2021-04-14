@@ -272,7 +272,7 @@ static const char *get_entry(apr_pool_t *p, digest_algorithm *result,
 static int want_digest_get(request_rec *r)
 {
     // variables
-    int rc, file_exists, hash_exists, len;
+    int rv, file_exists, hash_exists, len;
     apr_finfo_t finfo;
     apr_file_t* file;
     char *filename, *hash_filename;
@@ -288,13 +288,13 @@ static int want_digest_get(request_rec *r)
     filename = apr_pstrdup(r->pool, r->filename);
 
     // Check if the file a digest is requested for exists and that it isn't a directory, otherwise don't serve the request
-    rc = apr_stat(&finfo, filename, APR_FINFO_NORM, r->pool);
-    if (rc == APR_SUCCESS) 
+    rv = apr_stat(&finfo, filename, APR_FINFO_NORM, r->pool);
+    if (rv == APR_SUCCESS) 
     {
         file_exists = ( !(finfo.filetype & APR_NOFILE) && !(finfo.filetype & APR_DIR));
         if (!file_exists) return HTTP_NOT_FOUND; // Return a 404 if not found.
     }
-    else if (rc == 2) return HTTP_NOT_FOUND; // If apr_stat returns 2, the file does not exist. same return value as the system function stat.
+    else if (rv == 2) return HTTP_NOT_FOUND; // If apr_stat returns 2, the file does not exist. same return value as the system function stat.
     else return HTTP_FORBIDDEN; // If apr_stat failed, we're probably not allowed to check this file.
 
     // get DigestRootDir from cfg
@@ -323,14 +323,15 @@ static int want_digest_get(request_rec *r)
             hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
             if (hash_exists == 0)
             {
-                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     char hash_buf[finfo.size];
                     char b64_digest[apr_base64_encode_len(sizeof(hash_buf))];
                     char final_digest[sizeof(b64_digest)+4];
 
-                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    rv = apr_file_read(file, &hash_buf, &finfo.size);
+                    if (rv != APR_SUCCESS) return rv;
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
                                  "Read MD5 digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
@@ -339,17 +340,17 @@ static int want_digest_get(request_rec *r)
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
             else
             {
-                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     calculate_md5(r, file, buffer, readBytes);
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
         }
@@ -359,14 +360,14 @@ static int want_digest_get(request_rec *r)
             hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
             if (hash_exists == 0)
             {
-                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     char hash_buf[finfo.size];
                     char b64_digest[apr_base64_encode_len(sizeof(hash_buf))];
                     char final_digest[sizeof(b64_digest)+4];
 
-                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    rv = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
                                  "Read SHA digest %s from file of size %li.", hash_buf, finfo.size);
                     len = apr_base64_encode(b64_digest, hash_buf, sizeof(hash_buf));
@@ -374,17 +375,17 @@ static int want_digest_get(request_rec *r)
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
             else
             {
-                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     calculate_sha(r, file, buffer, readBytes);
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
         }
@@ -394,29 +395,29 @@ static int want_digest_get(request_rec *r)
             hash_exists = apr_stat(&finfo, hash_filename, APR_FINFO_NORM, r->pool);
             if (hash_exists == 0)
             {
-                rc = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, hash_filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     char final_digest[finfo.size+9];
                     char hash_buf[finfo.size];
-                    rc = apr_file_read(file, &hash_buf, &finfo.size);
+                    rv = apr_file_read(file, &hash_buf, &finfo.size);
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, r->server, APLOGNO()
                                  "Read ADLER32 digest %s from file %li.", hash_buf, finfo.size);
                     snprintf(&final_digest[0], sizeof(final_digest), "ADLER32=%s", hash_buf);
 
                     apr_table_add(r->headers_out, "Digest", final_digest); 
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
             else
             {
-                rc = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
-                if (rc == APR_SUCCESS)
+                rv = apr_file_open(&file, filename, APR_READ, APR_OS_DEFAULT, r->pool);
+                if (rv == APR_SUCCESS)
                 {
                     calculate_adler32(r, file, buffer, readBytes);
                 }
-                else return 500;
+                else return rv;
                 apr_file_close(file);
             }
         }
@@ -545,7 +546,8 @@ static apr_status_t want_digest_put_filter(ap_filter_t *f, apr_bucket_brigade *b
             // delete lock file
             if (ctx-> lock == 1)
             {
-                if (apr_file_remove(ctx->lock_filename, f->r->pool) != APR_SUCCESS) return 500;
+                rv = apr_file_remove(ctx->lock_filename, f->r->pool);
+                if (rv != APR_SUCCESS) return rv;
             }
             ap_remove_input_filter(f);
             break;
