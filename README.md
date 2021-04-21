@@ -37,6 +37,9 @@ Content-Type: text/plain
 
 Version 0.1 was shipped without caching and can be found under the tag `v0.1`. The main branch is subject to change. For stable versions, please download and use the newest release.
 
+Requirements:
+zlib >= v1.2.9 (adler32_z was declared as uLong before 1.2.9, now is size_t)
+
 Nota bene:
 The module does not calculate or cache digests for files that are copied directly into the directory configured to be served via webDAV. There is, however, the option to use a combination of `inotifywait` and a fitting script on system level to achieve that. If you are interested in such an implementation, please let us know.
 
