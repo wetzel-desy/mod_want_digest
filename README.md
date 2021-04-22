@@ -5,6 +5,15 @@ This module is an **alpha** version of an Apache2 httpd module that implements a
 It has been tested with various HTTP header combinations and returns the correct digests according to specifications in RFC 3230.
 Currently, ADLER32, MD5 and SHA-1 checksums are supported.
 
+*Nota bene*:
+The module does not calculate or cache digests for files that are copied directly into the directory configured to be served via webDAV. There is, however, the option to use a combination of `inotifywait` and a fitting script on system level to achieve that. If you are interested in such an implementation, please let us know.
+
+Version 0.1 was shipped without digest caching and can be found under the tag `v0.1`. As the main branch is subject to change, please download and use the newest release for a stable version.
+
+**Dependencies**:
+zlib >= v1.2.9 (adler32_z was declared as uLong before v1.2.9, now is size_t)
+
+**Installation**:
 The module is compiled, installed and activated (-cia) via
 ```
 sudo apxs -cia mod_want_digest.c
@@ -20,6 +29,7 @@ Example configuration:
 </Directory>
 ```
 
+**Usage**:
 Example HTTP request via cURL:
 ``` 
 curl --head https://foo.bar.com/foobar.txt -H "Want-Digest: MD5"
@@ -34,14 +44,6 @@ Content-Length: 3000678009
 Vary: Accept-Encoding
 Content-Type: text/plain
 ```
-
-Version 0.1 was shipped without caching and can be found under the tag `v0.1`. The main branch is subject to change. For stable versions, please download and use the newest release.
-
-Requirements:
-zlib >= v1.2.9 (adler32_z was declared as uLong before 1.2.9, now is size_t)
-
-Nota bene:
-The module does not calculate or cache digests for files that are copied directly into the directory configured to be served via webDAV. There is, however, the option to use a combination of `inotifywait` and a fitting script on system level to achieve that. If you are interested in such an implementation, please let us know.
 
 Contributors
 ================
